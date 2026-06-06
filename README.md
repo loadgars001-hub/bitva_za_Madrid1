@@ -67,3 +67,7 @@ At the top of the screen you can see:
 current wave
 war phase
 rain phase
+
+Link game
+https://loadgars001-hub.github.io/bitva_za_Madrid1/
+
