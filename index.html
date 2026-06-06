@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Битва за Madrid v5</title>
+<style>
+:root{color-scheme:dark;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0e0e0e;color:#fff;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden;height:100dvh;display:flex;flex-direction:column;}
+
+/* TOP BAR */
+#topbar{background:#181818;border-bottom:1px solid #2a2a2a;padding:5px 8px;flex-shrink:0;}
+#stats{display:flex;flex-wrap:wrap;gap:5px 10px;align-items:center;justify-content:center;font-size:12px;margin-bottom:5px;}
+.pill{background:#252525;padding:3px 9px;border-radius:999px;white-space:nowrap;}
+.pill.wave{background:#2a1a00;color:#ffb347;}
+.pill.rest{background:#0a2a1a;color:#5ef08a;animation:rp 1s infinite alternate;}
+.pill.rain{background:#0a1a2a;color:#7ec8e3;}
+.pill.rain.on{animation:rainp 1s infinite alternate;}
+@keyframes rp{from{color:#5ef08a}to{color:#fff}}
+@keyframes rainp{from{color:#7ec8e3}to{color:#fff}}
+#buttons{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;}
+button{appearance:none;border:0;border-radius:8px;color:#fff;font-size:12px;padding:7px 11px;min-height:36px;cursor:pointer;}
+button:active{transform:scale(.95);}
+.bs{background:#1d4ed8;}.ba{background:#6d28d9;}.bb{background:#92400e;}.bh{background:#7f1d1d;}.bn{background:#065f46;font-weight:700;}
+
+/* PHASE OVERLAY */
+#phaseOverlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:99;}
+#phaseMsg{font-size:clamp(20px,5vw,40px);font-weight:800;letter-spacing:2px;text-shadow:0 0 20px currentColor;opacity:0;transition:opacity .4s;}
+#phaseMsg.show{opacity:1;}
+
+#wrap{flex:1;overflow:hidden;position:relative;}
+canvas{display:block;cursor:crosshair;touch-action:none;}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <div id="stats">
+    <div class="pill">🪙 <span id="gEl">200</span></div>
+    <div class="pill">⭐ <span id="sEl">0</span></div>
+    <div class="pill">🏰 <span id="hEl">100</span></div>
+    <div class="pill">⚔️ <span id="soEl">0</span></div>
+    <div class="pill">🏹 <span id="arEl">0</span></div>
+    <div class="pill">💀 <span id="enEl">0</span></div>
+    <div class="pill">🗺️ <span id="tEl">0</span>/7</div>
+    <div class="pill wave">Волна <span id="wEl">1</span></div>
+    <div class="pill" id="phPill">⚔️ Бой</div>
+    <div class="pill rain" id="rnPill">🌧 <span id="rnEl">5:00</span></div>
+  </div>
+  <div id="buttons">
+    <button class="bs" id="bSol">⚔️ Воин (25🪙)</button>
+    <button class="ba" id="bArc">🏹 Лучник (45🪙)</button>
+    <button class="bb" id="bBase">🏗️ База (80🪙)</button>
+    <button class="bh" id="bHard">😈 +5 врагов</button>
+    <button class="bn" id="bNext" style="display:none">▶️ Начать волну</button>
+  </div>
+</div>
+<div id="phaseOverlay"><div id="phaseMsg"></div></div>
+<div id="wrap"><canvas id="game"></canvas></div>
+
+<script>
+// ════════════════════════════════════════════════════
+// WORLD
+// ════════════════════════════════════════════════════
+const MAP_W=2400, MAP_H=1350, TILE=60;
+
+// Territories: owner = 'madrid'|'paris'|'italy'|'neutral'
+// progress 0-100: how much Madrid controls it (100=captured)
+const TERRITORIES = [
+  // Madrid side
+  {id:0, x:60,   y:500,  w:380, h:380, owner:'madrid', progress:100, name:'Мадрид',   locked:true},
+  // Capturable neutrals (Italy - grey, can be taken peacefully)
+  {id:1, x:480,  y:200,  w:320, h:320, owner:'italy',  progress:0,   name:'Арагон',   locked:false},
+  {id:2, x:480,  y:840,  w:320, h:320, owner:'italy',  progress:0,   name:'Валенсия', locked:false},
+  {id:3, x:900,  y:520,  w:340, h:340, owner:'italy',  progress:0,   name:'Кастилья', locked:false},
+  // Paris-controlled (enemy)
+  {id:4, x:1380, y:200,  w:360, h:360, owner:'paris',  progress:0,   name:'Париж-С',  locked:false},
+  {id:5, x:1380, y:800,  w:360, h:360, owner:'paris',  progress:0,   name:'Париж-Ю',  locked:false},
+  {id:6, x:1920, y:450,  w:420, h:420, owner:'paris',  progress:0,   name:'Бордо',    locked:false},
+];
+
+// Capture points (flags) in center of each territory
+// Paris base
+const PARIS_BASE = {x:2100, y:620, w:100, h:100, hp:300, maxHp:300};
+
+const BASE_SPOTS=[
+  {x:510,y:310},{x:510,y:910},{x:1020,y:645},
+  {x:1420,y:310},{x:1420,y:850},{x:1980,y:610},
+];
+
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+
+// ── UI refs
+const gEl=document.getElementById('gEl'),sEl=document.getElementById('sEl'),
+  hEl=document.getElementById('hEl'),soEl=document.getElementById('soEl'),
+  arEl=document.getElementById('arEl'),enEl=document.getElementById('enEl'),
+  tEl=document.getElementById('tEl'),wEl=document.getElementById('wEl'),
+  phPill=document.getElementById('phPill'),rnPill=document.getElementById('rnPill'),
+  rnEl=document.getElementById('rnEl'),bSol=document.getElementById('bSol'),
+  bArc=document.getElementById('bArc'),bBase=document.getElementById('bBase'),
+  bHard=document.getElementById('bHard'),bNext=document.getElementById('bNext'),
+  phaseMsg=document.getElementById('phaseMsg');
+
+// ── State
+let gold=200,score=0,wave=1;
+let phase='rest', restLeft=25;
+const REST_DUR=25;
+let city={x:90,y:580,w:100,h:100,hp:100,maxHp:100};
+let soldiers=[],archers=[],arrows=[],enemies=[];
+let bases=[];
+let lastTime=0,spawnTimer=0,spawnedWave=0;
+let camX=0,camY=0,viewW=800,viewH=450;
+let tapMode='soldier';
+let dragStart=null,camStart=null,isDragging=false;
+
+// Rain
+const RAIN_INT=300,RAIN_DUR=15;
+let rainCD=RAIN_INT,rainOn=false,rainLeft=0,rainDrops=[];
+
+// Capture system
+const CAP_RADIUS=90;    // units must be within this to capture
+const CAP_SPEED=12;     // progress per second per unit
+
+// ════════════════════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════════════════════
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const dist=(ax,ay,bx,by)=>Math.hypot(ax-bx,ay-by);
+
+function nearest(unit,list){
+  let b=null,bd=Infinity;
+  for(const t of list){const d=dist(unit.x,unit.y,t.x,t.y);if(d<bd){bd=d;b=t;}}
+  return b;
+}
+function moveTo(u,tx,ty,spd,dt){
+  const dx=tx-u.x,dy=ty-u.y,d=Math.hypot(dx,dy)||1;
+  u.x=clamp(u.x+(dx/d)*spd*dt*60,u.r,MAP_W-u.r);
+  u.y=clamp(u.y+(dy/d)*spd*dt*60,u.r,MAP_H-u.r);
+}
+const w2s=(wx,wy)=>[wx-camX,wy-camY];
+const s2w=(sx,sy)=>[sx+camX,sy+camY];
+function clampCam(){camX=clamp(camX,0,MAP_W-viewW);camY=clamp(camY,0,MAP_H-viewH);}
+
+function terCenter(t){return{x:t.x+t.w/2, y:t.y+t.h/2};}
+
+// ════════════════════════════════════════════════════
+// FACTORIES
+// ════════════════════════════════════════════════════
+const mkSoldier=(x,y)=>({x,y,r:11,hp:100,maxHp:100,speed:.95+rand(0,.5),dmg:13,range:23,cooldown:0,faction:'madrid'});
+const mkArcher =(x,y)=>({x,y,r:11,hp:70, maxHp:70, speed:.7 +rand(0,.4),dmg:22,range:130,cooldown:0,faction:'madrid',isArcher:true});
+
+function mkEnemy(wn){
+  // Spawn from Paris side (right)
+  const edge=Math.random()<.7?1:Math.floor(Math.random()*2)===0?0:2;
+  let x=0,y=0;
+  if(edge===0){x=rand(MAP_W*.5,MAP_W-40);y=-20;}
+  if(edge===1){x=MAP_W+20;y=rand(20,MAP_H-20);}
+  if(edge===2){x=rand(MAP_W*.5,MAP_W-40);y=MAP_H+20;}
+  const sc=1+(wn-1)*.2;
+  return{x,y,r:12,hp:Math.round(75*sc),maxHp:Math.round(75*sc),
+    speed:(.6+rand(0,.5))*Math.min(sc,2),
+    dmg:Math.round(9*Math.min(sc,2.5)),range:22,cooldown:0,faction:'paris'};
+}
+
+function mkBase(si){
+  const s=BASE_SPOTS[si];
+  return{x:s.x-40,y:s.y-40,w:80,h:80,hp:250,maxHp:250,spotIdx:si,
+    healR:150,healRate:6,spawnCD:0,spawnInt:18};
+}
+
+function initRain(){
+  rainDrops=Array.from({length:260},()=>({
+    x:rand(0,MAP_W),y:rand(0,MAP_H),
+    spd:7+rand(0,6),len:12+rand(0,12),a:.3+rand(0,.5)
+  }));
+}
+
+// ════════════════════════════════════════════════════
+// PURCHASE
+// ════════════════════════════════════════════════════
+function buySoldier(wx,wy){
+  if(gold<25)return false;
+  gold-=25;
+  const x=wx??city.x+city.w+30, y=wy??city.y+city.h/2+rand(-40,40);
+  soldiers.push(mkSoldier(clamp(x,20,MAP_W-20),clamp(y,20,MAP_H-20)));
+  return true;
+}
+function buyArcher(wx,wy){
+  if(gold<45)return false;
+  gold-=45;
+  const x=wx??city.x+city.w+30, y=wy??city.y+city.h/2+rand(-40,40);
+  archers.push(mkArcher(clamp(x,20,MAP_W-20),clamp(y,20,MAP_H-20)));
+  return true;
+}
+function buyBase(wx,wy){
+  if(gold<80)return false;
+  let bi=-1,bd=Infinity;
+  for(let i=0;i<BASE_SPOTS.length;i++){
+    if(bases.find(b=>b.spotIdx===i))continue;
+    const d=dist(wx,wy,BASE_SPOTS[i].x,BASE_SPOTS[i].y);
+    if(d<bd){bd=d;bi=i;}
+  }
+  if(bi<0||bd>220)return false;
+  gold-=80; bases.push(mkBase(bi)); return true;
+}
+
+// ════════════════════════════════════════════════════
+// PHASE
+// ════════════════════════════════════════════════════
+function showMsg(txt,color,dur=2200){
+  phaseMsg.textContent=txt; phaseMsg.style.color=color;
+  phaseMsg.classList.add('show');
+  setTimeout(()=>phaseMsg.classList.remove('show'),dur);
+}
+function startRest(){
+  phase='rest'; restLeft=REST_DUR;
+  enemies=[]; spawnTimer=0; spawnedWave=0;
+  bNext.style.display='inline-block';
+  city.hp=Math.min(city.maxHp,city.hp+15);
+  showMsg('😴 ФАЗА ОТДЫХА','#5ef08a');
+}
+function startFight(){
+  phase='fight'; bNext.style.display='none';
+  showMsg('⚔️ ВОЛНА '+wave+' — ПАРИЖ АТАКУЕТ!','#ff6b6b');
+}
+
+// ════════════════════════════════════════════════════
+// RESIZE
+// ════════════════════════════════════════════════════
+function resize(){
+  const wrap=document.getElementById('wrap');
+  viewW=wrap.clientWidth; viewH=wrap.clientHeight;
+  canvas.width=viewW; canvas.height=viewH;
+  clampCam();
+}
+window.addEventListener('resize',resize);
+
+// ════════════════════════════════════════════════════
+// INPUT
+// ════════════════════════════════════════════════════
+bSol.onclick=()=>{tapMode='soldier';buySoldier();updateUI();};
+bArc.onclick=()=>{tapMode='archer'; buyArcher(); updateUI();};
+bBase.onclick=()=>{tapMode='base'; updateUI();};
+bHard.onclick=()=>{for(let i=0;i<5;i++)enemies.push(mkEnemy(wave));updateUI();};
+bNext.onclick=()=>startFight();
+
+canvas.addEventListener('pointerdown',e=>{
+  const r=canvas.getBoundingClientRect();
+  const sx=(e.clientX-r.left)*(canvas.width/r.width);
+  const sy=(e.clientY-r.top)*(canvas.height/r.height);
+  dragStart={sx,sy}; camStart={cx:camX,cy:camY}; isDragging=false;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove',e=>{
+  if(!dragStart)return;
+  const r=canvas.getBoundingClientRect();
+  const sx=(e.clientX-r.left)*(canvas.width/r.width);
+  const sy=(e.clientY-r.top)*(canvas.height/r.height);
+  const dx=sx-dragStart.sx,dy=sy-dragStart.sy;
+  if(!isDragging&&(Math.abs(dx)>6||Math.abs(dy)>6))isDragging=true;
+  if(isDragging){camX=camStart.cx-dx;camY=camStart.cy-dy;clampCam();}
+});
+canvas.addEventListener('pointerup',e=>{
+  if(!dragStart)return;
+  const r=canvas.getBoundingClientRect();
+  const sx=(e.clientX-r.left)*(canvas.width/r.width);
+  const sy=(e.clientY-r.top)*(canvas.height/r.height);
+  if(!isDragging){
+    const [wx,wy]=s2w(sx,sy);
+    if(tapMode==='base'){if(!buyBase(wx,wy))tapMode='soldier';}
+    else if(tapMode==='archer'){if(!buyArcher(wx,wy))buySoldier(wx,wy);}
+    else{if(!buySoldier(wx,wy))buyArcher(wx,wy);}
+    updateUI();
+  }
+  dragStart=null;isDragging=false;
+});
+
+// ════════════════════════════════════════════════════
+// UPDATE
+// ════════════════════════════════════════════════════
+function update(dt){
+  // ── Rain
+  if(rainOn){
+    rainLeft-=dt;
+    if(rainLeft<=0){rainOn=false;rainDrops=[];}
+    else for(const d of rainDrops){d.y+=d.spd;d.x-=d.spd*.3;if(d.y>MAP_H+20){d.y=-20;d.x=rand(0,MAP_W);}if(d.x<-20)d.x=MAP_W+20;}
+  } else{
+    rainCD-=dt;
+    if(rainCD<=0){rainOn=true;rainLeft=RAIN_DUR;rainCD=RAIN_INT;initRain();}
+  }
+  const slow=rainOn?.45:1;
+
+  // ── TERRITORY CAPTURE
+  for(const t of TERRITORIES){
+    if(t.locked)continue;
+    const c=terCenter(t);
+    const madridUnits=[...soldiers,...archers].filter(u=>dist(u.x,u.y,c.x,c.y)<CAP_RADIUS);
+    const parisUnits =enemies.filter(u=>dist(u.x,u.y,c.x,c.y)<CAP_RADIUS);
+
+    if(madridUnits.length>0&&parisUnits.length===0){
+      // Capturing for Madrid
+      t.progress=Math.min(100,t.progress+CAP_SPEED*madridUnits.length*dt);
+      if(t.progress>=100&&t.owner!=='madrid'){
+        t.owner='madrid';
+        gold+=t.owner==='paris'?60:30;
+        score+=100;
+        showMsg('✅ Захвачено: '+t.name,'#4ade80',1800);
+      }
+    } else if(parisUnits.length>0&&madridUnits.length===0){
+      // Paris recapturing
+      if(t.owner==='madrid'){
+        t.progress=Math.max(0,t.progress-CAP_SPEED*parisUnits.length*dt);
+        if(t.progress<=0)t.owner='paris';
+      }
+    }
+    // Gold trickle from owned territories
+    if(t.owner==='madrid'&&!t.locked) gold+=0.8*dt;
+  }
+
+  // ── REST PHASE
+  if(phase==='rest'){
+    restLeft-=dt;
+    for(const b of bases){
+      const nearby=[...soldiers,...archers].filter(u=>dist(u.x,u.y,b.x+b.w/2,b.y+b.h/2)<b.healR);
+      for(const u of nearby)u.hp=Math.min(u.maxHp,u.hp+b.healRate*dt);
+    }
+    if(restLeft<=0)startFight();
+    updateUI();return;
+  }
+
+  // ── FIGHT PHASE
+  const total=6+wave*5;
+  if(spawnedWave<total){
+    spawnTimer+=dt;
+    const si=Math.max(.35,1.6-wave*.1);
+    while(spawnTimer>=si&&spawnedWave<total){spawnTimer-=si;enemies.push(mkEnemy(wave));spawnedWave++;}
+  }
+  if(spawnedWave>=total&&enemies.length===0){
+    score+=wave*60; gold+=wave*35; wave++; startRest(); updateUI();return;
+  }
+
+  // ── Soldiers
+  for(let i=0;i<soldiers.length;i++){
+    const s=soldiers[i];
+    s.cooldown=Math.max(0,s.cooldown-dt);
+    const t=nearest(s,enemies);
+    if(t){
+      moveTo(s,t.x,t.y,s.speed,dt);
+      if(dist(s.x,s.y,t.x,t.y)<=s.range&&s.cooldown<=0){t.hp-=s.dmg;s.cooldown=.45;}
+    } else {
+      // Move toward uncaptured territory or patrol base
+      const unc=TERRITORIES.find(tr=>tr.owner!=='madrid'&&!tr.locked);
+      if(unc){const c=terCenter(unc);moveTo(s,c.x+rand(-50,50),c.y+rand(-50,50),s.speed*.4,dt);}
+      else moveTo(s,clamp(s.x+rand(-80,80),20,MAP_W-20),clamp(s.y+rand(-80,80),20,MAP_H-20),s.speed*.3,dt);
+    }
+    for(let j=i+1;j<soldiers.length;j++){
+      const o=soldiers[j],d=dist(s.x,s.y,o.x,o.y);
+      if(d>0&&d<s.r+o.r){const p=(s.r+o.r-d)*.02,dx=(s.x-o.x)/d,dy=(s.y-o.y)/d;s.x+=dx*p;s.y+=dy*p;o.x-=dx*p;o.y-=dy*p;}
+    }
+  }
+
+  // ── Archers
+  for(const a of archers){
+    a.cooldown=Math.max(0,a.cooldown-dt);
+    const t=nearest(a,enemies);
+    if(t){
+      const d=dist(a.x,a.y,t.x,t.y);
+      if(d<65){const dx=(a.x-t.x)/(d||1),dy=(a.y-t.y)/(d||1);a.x=clamp(a.x+dx*a.speed*dt*60,a.r,MAP_W-a.r);a.y=clamp(a.y+dy*a.speed*dt*60,a.r,MAP_H-a.r);}
+      else if(d>a.range)moveTo(a,t.x,t.y,a.speed,dt);
+      if(d<=a.range&&a.cooldown<=0){t.hp-=a.dmg;a.cooldown=.75;arrows.push({x:a.x,y:a.y,tx:t.x,ty:t.y,life:.18});}
+    } else {
+      const unc=TERRITORIES.find(tr=>tr.owner!=='madrid'&&!tr.locked);
+      if(unc){const c=terCenter(unc);moveTo(a,c.x+rand(-60,60),c.y+rand(-60,60),a.speed*.3,dt);}
+    }
+  }
+  arrows=arrows.filter(ar=>{ar.life-=dt;return ar.life>0;});
+
+  // ── Enemies (Paris)
+  const friendly=[...soldiers,...archers];
+  for(const e of enemies){
+    e.cooldown=Math.max(0,e.cooldown-dt);
+    const ft=nearest(e,friendly);
+    let tx=city.x+city.w/2,ty=city.y+city.h/2;
+    // Also target Madrid-owned territories
+    for(const t of TERRITORIES){
+      if(t.owner==='madrid'&&!t.locked){const c=terCenter(t);if(dist(e.x,e.y,c.x,c.y)<dist(e.x,e.y,tx,ty)){tx=c.x;ty=c.y;}}
+    }
+    for(const b of bases){const d=dist(e.x,e.y,b.x+b.w/2,b.y+b.h/2);if(d<dist(e.x,e.y,tx,ty)){tx=b.x+b.w/2;ty=b.y+b.h/2;}}
+    if(ft){const df=dist(e.x,e.y,ft.x,ft.y),dc=dist(e.x,e.y,tx,ty);if(df<dc*1.15){tx=ft.x;ty=ft.y;}}
+    const os=e.speed;e.speed*=slow;moveTo(e,tx,ty,e.speed,dt);e.speed=os;
+    if(ft&&dist(e.x,e.y,ft.x,ft.y)<28&&e.cooldown<=0){ft.hp-=e.dmg;e.cooldown=.6;}
+    if(dist(e.x,e.y,city.x+city.w/2,city.y+city.h/2)<58)city.hp-=2.5*dt;
+    for(const b of bases)if(dist(e.x,e.y,b.x+b.w/2,b.y+b.h/2)<50)b.hp-=2*dt;
+  }
+
+  // Base auto-spawn
+  for(const b of bases){
+    if(b.hp<=0)continue;
+    b.spawnCD=Math.max(0,b.spawnCD-dt);
+    if(b.spawnCD<=0){b.spawnCD=b.spawnInt;soldiers.push(mkSoldier(b.x+b.w/2+rand(-25,25),b.y+b.h/2+rand(-25,25)));}
+  }
+
+  soldiers=soldiers.filter(s=>s.hp>0);
+  archers =archers.filter(a=>a.hp>0);
+  bases   =bases.filter(b=>b.hp>0);
+  enemies =enemies.filter(e=>{if(e.hp<=0){score+=12+wave*2;gold+=7+wave;return false;}return true;});
+
+  if(city.hp<=0){draw();alert('Madrid пал!\nОчки: '+Math.floor(score)+'\nВолна: '+wave);location.reload();}
+  updateUI();
+}
+
+// ════════════════════════════════════════════════════
+// UI UPDATE
+// ════════════════════════════════════════════════════
+function updateUI(){
+  gEl.textContent=Math.floor(gold);
+  sEl.textContent=Math.floor(score);
+  hEl.textContent=Math.max(0,Math.floor(city.hp));
+  soEl.textContent=soldiers.length;
+  arEl.textContent=archers.length;
+  enEl.textContent=enemies.length;
+  tEl.textContent=TERRITORIES.filter(t=>t.owner==='madrid').length;
+  wEl.textContent=wave;
+  if(phase==='rest'){phPill.textContent='😴 Отдых '+Math.ceil(restLeft)+'с';phPill.className='pill rest';bNext.style.display='inline-block';}
+  else{phPill.textContent='⚔️ Волна '+wave;phPill.className='pill wave';bNext.style.display='none';}
+  if(rainOn){rnEl.textContent=Math.ceil(rainLeft)+'с';rnPill.className='pill rain on';}
+  else{const t=Math.ceil(rainCD);rnEl.textContent=Math.floor(t/60)+':'+String(t%60).padStart(2,'0');rnPill.className='pill rain';}
+  bBase.textContent=tapMode==='base'?'📍 Тапни на точку':'🏗️ База (80🪙)';
+}
+
+// ════════════════════════════════════════════════════
+// DRAW HELPERS
+// ════════════════════════════════════════════════════
+// Territory colors
+const TER_COLORS={
+  madrid:{bg:'rgba(59,130,246,0.22)',border:'#3b82f6',flag:'🇪🇸'},
+  paris: {bg:'rgba(239,68,68,0.22)', border:'#ef4444',flag:'🇫🇷'},
+  italy: {bg:'rgba(200,200,200,0.13)',border:'#aaaaaa',flag:'🇮🇹'},
+  neutral:{bg:'rgba(120,120,120,0.1)',border:'#666',flag:'⬜'},
+};
+
+function drawTerritories(){
+  for(const t of TERRITORIES){
+    const [sx,sy]=w2s(t.x,t.y);
+    if(sx>viewW+10||sy>viewH+10||sx+t.w<-10||sy+t.h<-10)continue;
+    const col=TER_COLORS[t.owner]||TER_COLORS.neutral;
+
+    // Territory fill
+    ctx.save();
+    ctx.fillStyle=col.bg;
+    ctx.fillRect(sx,sy,t.w,t.h);
+
+    // Border
+    ctx.strokeStyle=col.border;
+    ctx.lineWidth=t.locked?3:2;
+    ctx.setLineDash(t.locked?[]:[8,4]);
+    ctx.strokeRect(sx,sy,t.w,t.h);
+    ctx.setLineDash([]);
+
+    // Name label (white semi-transparent rectangle behind text)
+    const cx=sx+t.w/2, cy=sy+t.h/2;
+    ctx.font='bold 14px Arial';
+    ctx.textAlign='center';
+    const lbl=col.flag+' '+t.name;
+    const lw=ctx.measureText(lbl).width;
+
+    // ► WHITE SEMI-TRANSPARENT RECTANGLE
+    ctx.fillStyle='rgba(255,255,255,0.18)';
+    ctx.beginPath();
+    ctx.roundRect(cx-lw/2-8,cy-12,lw+16,22,6);
+    ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.fillText(lbl,cx,cy+4);
+
+    // Capture progress bar (if not locked and in progress)
+    if(!t.locked&&t.owner!=='madrid'){
+      const bw=t.w-20;
+      ctx.fillStyle='rgba(0,0,0,.4)';ctx.fillRect(sx+10,sy+t.h-18,bw,8);
+      ctx.fillStyle=t.owner==='paris'?'#f87171':'#60a5fa';
+      ctx.fillRect(sx+10,sy+t.h-18,bw*(t.progress/100),8);
+      if(t.progress>0){
+        ctx.fillStyle='#fff';ctx.font='10px Arial';ctx.textAlign='center';
+        ctx.fillText(Math.floor(t.progress)+'%',sx+t.w/2,sy+t.h-11);
+      }
+    }
+    if(t.owner==='madrid'&&!t.locked){
+      // Small captured checkmark
+      ctx.fillStyle='#4ade80';ctx.font='bold 16px Arial';ctx.textAlign='center';
+      ctx.fillText('✓',sx+t.w-16,sy+18);
+    }
+    ctx.restore();
+  }
+}
+
+function drawCapZone(t){
+  // Pulsing capture radius circle on territory center
+  if(t.locked)return;
+  const c=terCenter(t);const[sx,sy]=w2s(c.x,c.y);
+  if(sx<-CAP_RADIUS||sy<-CAP_RADIUS||sx>viewW+CAP_RADIUS||sy>viewH+CAP_RADIUS)return;
+  const pulse=.5+.5*Math.sin(Date.now()*.003);
+  ctx.save();
+  ctx.globalAlpha=.07+.05*pulse;
+  ctx.fillStyle=t.owner==='paris'?'#ef4444':t.owner==='madrid'?'#3b82f6':'#aaaaaa';
+  ctx.beginPath();ctx.arc(sx,sy,CAP_RADIUS,0,Math.PI*2);ctx.fill();
+  ctx.globalAlpha=.25;
+  ctx.strokeStyle=t.owner==='madrid'?'#4ade80':'#fff';
+  ctx.lineWidth=1.5;ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.arc(sx,sy,CAP_RADIUS,0,Math.PI*2);ctx.stroke();
+  ctx.setLineDash([]);ctx.restore();
+}
+
+function drawParisBoss(){
+  const [sx,sy]=w2s(PARIS_BASE.x,PARIS_BASE.y);
+  if(sx>viewW+120||sy>viewH+120||sx+PARIS_BASE.w<-20)return;
+  ctx.save();
+  ctx.fillStyle='#7f1d1d';ctx.fillRect(sx,sy,PARIS_BASE.w,PARIS_BASE.h);
+  ctx.fillStyle='#991b1b';
+  ctx.fillRect(sx+8,sy+25,22,40);ctx.fillRect(sx+68,sy+15,22,50);
+  // Eiffel tower silhouette hint
+  ctx.fillStyle='#450a0a';ctx.fillRect(sx+PARIS_BASE.w/2-3,sy-30,6,32);
+  ctx.beginPath();ctx.moveTo(sx+PARIS_BASE.w/2,sy-30);ctx.lineTo(sx+PARIS_BASE.w/2-18,sy);ctx.lineTo(sx+PARIS_BASE.w/2+18,sy);ctx.fill();
+  // Flag
+  ctx.fillStyle='#fff';ctx.fillRect(sx+PARIS_BASE.w/2-2,sy-50,3,22);
+  // Tricolor
+  ctx.fillStyle='#1d4ed8';ctx.fillRect(sx+PARIS_BASE.w/2+1,sy-50,5,22);
+  ctx.fillStyle='#ef4444';ctx.fillRect(sx+PARIS_BASE.w/2+6,sy-50,5,22);
+
+  // Label rect
+  ctx.font='bold 13px Arial';ctx.textAlign='center';
+  const lbl='🇫🇷 Париж';const lw=ctx.measureText(lbl).width;
+  ctx.fillStyle='rgba(255,255,255,0.18)';
+  ctx.beginPath();ctx.roundRect(sx+PARIS_BASE.w/2-lw/2-8,sy-66,lw+16,20,5);ctx.fill();
+  ctx.fillStyle='#fff';ctx.fillText(lbl,sx+PARIS_BASE.w/2,sy-51);
+
+  // HP bar
+  const pct=Math.max(0,PARIS_BASE.hp/PARIS_BASE.maxHp);
+  ctx.fillStyle='#111';ctx.fillRect(sx,sy-10,PARIS_BASE.w,6);
+  ctx.fillStyle=pct>.5?'#22c55e':'#ef4444';
+  ctx.fillRect(sx,sy-10,PARIS_BASE.w*pct,6);
+  ctx.restore();
+}
+
+function drawMap(){
+  // Base terrain
+  ctx.fillStyle='#4d7a44';ctx.fillRect(0,0,viewW,viewH);
+
+  // Terrain zones
+  const zones=[
+    {x:0,y:0,w:460,h:MAP_H,c:'#3d6b38'},         // Madrid green left
+    {x:460,y:0,w:800,h:MAP_H,c:'#5a8f52'},        // Middle
+    {x:1260,y:0,w:MAP_W,h:MAP_H,c:'#6b8f43'},     // Paris territory - yellower
+    {x:0,y:640,w:MAP_W,h:70,c:'#7aaa60'},          // Horizontal road
+    {x:1200,y:0,w:70,h:MAP_H,c:'#7aaa60'},         // Vertical road
+    {x:750,y:350,w:200,h:200,c:'#3a5e34'},          // Forest patch
+    {x:1500,y:600,w:250,h:200,c:'#3a5e34'},
+    {x:300,y:900,w:180,h:250,c:'#3a5e34'},
+  ];
+  for(const z of zones){
+    const[sx,sy]=w2s(z.x,z.y);
+    ctx.fillStyle=z.c;ctx.fillRect(sx,sy,z.w,z.h);
+  }
+
+  // Grid
+  ctx.save();ctx.globalAlpha=.07;ctx.strokeStyle='#fff';ctx.lineWidth=1;
+  const gx=Math.floor(camX/TILE)*TILE,gy=Math.floor(camY/TILE)*TILE;
+  for(let x=gx;x<camX+viewW;x+=TILE){const s=x-camX;ctx.beginPath();ctx.moveTo(s,0);ctx.lineTo(s,viewH);ctx.stroke();}
+  for(let y=gy;y<camY+viewH;y+=TILE){const s=y-camY;ctx.beginPath();ctx.moveTo(0,s);ctx.lineTo(viewW,s);ctx.stroke();}
+  ctx.restore();
+}
+
+function drawBuildSpots(){
+  for(let i=0;i<BASE_SPOTS.length;i++){
+    if(bases.find(b=>b.spotIdx===i))continue;
+    const s=BASE_SPOTS[i];const[sx,sy]=w2s(s.x,s.y);
+    if(sx<-60||sy<-60||sx>viewW+60||sy>viewH+60)continue;
+    ctx.save();
+    ctx.fillStyle='rgba(255,255,255,0.12)';
+    ctx.strokeStyle='#f59e0b';ctx.lineWidth=2;ctx.setLineDash([6,4]);
+    ctx.beginPath();ctx.roundRect(sx-28,sy-28,56,56,6);ctx.fill();ctx.stroke();
+    ctx.setLineDash([]);ctx.fillStyle='#fbbf24';ctx.font='bold 11px Arial';ctx.textAlign='center';
+    ctx.fillText('🏗️',sx,sy+5);
+    ctx.restore();
+  }
+}
+
+function drawBase(b){
+  const[sx,sy]=w2s(b.x,b.y);
+  if(sx>viewW+100||sy>viewH+100||sx+b.w<-20)return;
+  ctx.save();
+  ctx.fillStyle='#92400e';ctx.fillRect(sx,sy,b.w,b.h);
+  ctx.fillStyle='#78350f';ctx.fillRect(sx+10,sy+20,20,40);ctx.fillRect(sx+50,sy+10,20,50);
+  ctx.fillStyle='#fbbf24';ctx.fillRect(sx+b.w/2-2,sy-20,4,22);
+  ctx.fillStyle='#ef4444';ctx.beginPath();ctx.moveTo(sx+b.w/2+2,sy-20);ctx.lineTo(sx+b.w/2+16,sy-12);ctx.lineTo(sx+b.w/2+2,sy-4);ctx.fill();
+  const pct=Math.max(0,b.hp/b.maxHp);
+  ctx.fillStyle='#111';ctx.fillRect(sx,sy-10,b.w,5);
+  ctx.fillStyle=pct>.5?'#22c55e':'#eab308';ctx.fillRect(sx,sy-10,b.w*pct,5);
+  if(phase==='rest'){ctx.globalAlpha=.12;ctx.strokeStyle='#4ade80';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx+b.w/2,sy+b.h/2,b.healR,0,Math.PI*2);ctx.stroke();}
+  ctx.restore();
+}
+
+function drawCity(){
+  const[sx,sy]=w2s(city.x,city.y);
+  ctx.save();
+  ctx.fillStyle='#d97706';ctx.fillRect(sx,sy,city.w,city.h);
+  ctx.fillStyle='#92400e';ctx.fillRect(sx+12,sy+32,22,36);ctx.fillRect(sx+62,sy+18,24,50);
+  ctx.fillStyle='#b45309';ctx.fillRect(sx-8,sy-8,20,30);ctx.fillRect(sx+city.w-12,sy-8,20,30);
+  // Label with white semi-transparent rect
+  ctx.font='bold 14px Arial';ctx.textAlign='center';
+  const lbl='🇪🇸 Madrid';const lw=ctx.measureText(lbl).width;
+  ctx.fillStyle='rgba(255,255,255,0.18)';
+  ctx.beginPath();ctx.roundRect(sx+city.w/2-lw/2-8,sy-28,lw+16,22,6);ctx.fill();
+  ctx.fillStyle='#fff';ctx.fillText(lbl,sx+city.w/2,sy-11);
+  const hpPct=Math.max(0,city.hp/city.maxHp);
+  ctx.fillStyle='#111';ctx.fillRect(sx,sy+city.h+4,city.w,6);
+  ctx.fillStyle=hpPct>.5?'#22c55e':'#ef4444';ctx.fillRect(sx,sy+city.h+4,city.w*hpPct,6);
+  ctx.restore();
+}
+
+function drawUnit(u,fill,outline){
+  const[sx,sy]=w2s(u.x,u.y);
+  if(sx<-20||sy<-20||sx>viewW+20||sy>viewH+20)return;
+  ctx.beginPath();ctx.fillStyle=fill;ctx.arc(sx,sy,u.r,0,Math.PI*2);ctx.fill();
+  ctx.lineWidth=2;ctx.strokeStyle=outline;ctx.stroke();
+  const bw=22,bh=4,pct=Math.max(0,u.hp/u.maxHp);
+  ctx.fillStyle='#111';ctx.fillRect(sx-bw/2,sy-u.r-9,bw,bh);
+  ctx.fillStyle=pct>.5?'#4ade80':'#facc15';ctx.fillRect(sx-bw/2,sy-u.r-9,bw*pct,bh);
+}
+
+function drawArcher(a){
+  const[sx,sy]=w2s(a.x,a.y);
+  if(sx<-20||sy<-20||sx>viewW+20||sy>viewH+20)return;
+  ctx.save();ctx.translate(sx,sy);
+  ctx.beginPath();ctx.fillStyle='#f59e0b';ctx.strokeStyle='#fde68a';ctx.lineWidth=2;
+  ctx.moveTo(0,-a.r);ctx.lineTo(a.r*.85,a.r*.7);ctx.lineTo(-a.r*.85,a.r*.7);
+  ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
+  const bw=22,bh=4,pct=Math.max(0,a.hp/a.maxHp);
+  ctx.fillStyle='#111';ctx.fillRect(sx-bw/2,sy-a.r-9,bw,bh);
+  ctx.fillStyle=pct>.5?'#4ade80':'#facc15';ctx.fillRect(sx-bw/2,sy-a.r-9,bw*pct,bh);
+}
+
+function drawArrows(){
+  ctx.save();ctx.lineWidth=2;
+  for(const ar of arrows){
+    const[x1,y1]=w2s(ar.x,ar.y),[x2,y2]=w2s(ar.tx,ar.ty);
+    ctx.globalAlpha=ar.life/.18;ctx.strokeStyle='#fde68a';
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawEnemyUnit(e){
+  const[sx,sy]=w2s(e.x,e.y);
+  if(sx<-20||sy<-20||sx>viewW+20||sy>viewH+20)return;
+  // Paris enemy: dark red diamond shape
+  ctx.save();ctx.translate(sx,sy);ctx.rotate(Math.PI/4);
+  ctx.fillStyle='#dc2626';ctx.strokeStyle='#fca5a5';ctx.lineWidth=2;
+  const s=e.r*.9;
+  ctx.fillRect(-s,-s,s*2,s*2);ctx.strokeRect(-s,-s,s*2,s*2);
+  ctx.restore();
+  // Label "Paris" on first few visible
+  const bw=22,bh=4,pct=Math.max(0,e.hp/e.maxHp);
+  ctx.fillStyle='#111';ctx.fillRect(sx-bw/2,sy-e.r-9,bw,bh);
+  ctx.fillStyle='#f87171';ctx.fillRect(sx-bw/2,sy-e.r-9,bw*pct,bh);
+}
+
+function drawRain(){
+  if(!rainOn)return;
+  ctx.save();ctx.strokeStyle='#bae6fd';ctx.lineWidth=1.5;
+  for(const d of rainDrops){
+    const[sx,sy]=w2s(d.x,d.y);
+    if(sx<-20||sx>viewW+20)continue;
+    ctx.globalAlpha=d.a;ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx-d.len*.3,sy+d.len);ctx.stroke();
+  }
+  ctx.globalAlpha=.08;ctx.fillStyle='#0369a1';ctx.fillRect(0,0,viewW,viewH);
+  ctx.restore();
+}
+
+function drawHUD(){
+  // ── MINIMAP (bottom-right)
+  const mmW=160,mmH=90,mmX=viewW-mmW-8,mmY=viewH-mmH-8;
+  ctx.save();
+  // White semi-transparent rectangle for minimap bg
+  ctx.fillStyle='rgba(255,255,255,0.12)';
+  ctx.beginPath();ctx.roundRect(mmX-2,mmY-2,mmW+4,mmH+4,6);ctx.fill();
+  ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(mmX,mmY,mmW,mmH);
+  ctx.strokeStyle='rgba(255,255,255,0.5)';ctx.lineWidth=1;ctx.strokeRect(mmX,mmY,mmW,mmH);
+  const mx=wx=>mmX+wx/MAP_W*mmW, my=wy=>mmY+wy/MAP_H*mmH;
+  // Draw territory blobs on minimap
+  for(const t of TERRITORIES){
+    ctx.globalAlpha=.35;
+    ctx.fillStyle=t.owner==='madrid'?'#3b82f6':t.owner==='paris'?'#ef4444':'#888';
+    ctx.fillRect(mx(t.x),my(t.y),t.w/MAP_W*mmW,t.h/MAP_H*mmH);
+  }
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#f59e0b';ctx.fillRect(mx(city.x),my(city.y),6,6);
+  for(const b of bases){ctx.fillStyle='#a16207';ctx.fillRect(mx(b.x),my(b.y),4,4);}
+  for(const s of soldiers){ctx.fillStyle='#60a5fa';ctx.fillRect(mx(s.x)-1,my(s.y)-1,2.5,2.5);}
+  for(const a of archers) {ctx.fillStyle='#fbbf24';ctx.fillRect(mx(a.x)-1,my(a.y)-1,2.5,2.5);}
+  for(const e of enemies) {ctx.fillStyle='#f87171';ctx.fillRect(mx(e.x)-1,my(e.y)-1,2.5,2.5);}
+  // Viewport
+  ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=1;
+  ctx.strokeRect(mx(camX),my(camY),viewW/MAP_W*mmW,viewH/MAP_H*mmH);
+  ctx.restore();
+
+  // ── REST OVERLAY BAR (white semi-transparent)
+  if(phase==='rest'){
+    ctx.save();
+    ctx.globalAlpha=.12;ctx.fillStyle='#052e16';ctx.fillRect(0,0,viewW,viewH);
+    // White semi-transparent pill
+    ctx.globalAlpha=1;
+    ctx.fillStyle='rgba(255,255,255,0.18)';
+    ctx.beginPath();ctx.roundRect(viewW/2-145,viewH-50,290,34,17);ctx.fill();
+    ctx.fillStyle='#4ade80';ctx.font='bold 15px Arial';ctx.textAlign='center';
+    ctx.fillText('😴 Отдых — осталось '+Math.ceil(restLeft)+'с',viewW/2,viewH-27);
+    ctx.restore();
+  }
+
+  // ── INFO PANEL (top-left, white semi-transparent rectangle)
+  ctx.save();
+  ctx.fillStyle='rgba(255,255,255,0.12)';
+  ctx.beginPath();ctx.roundRect(6,6,180,52,8);ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=1;
+  ctx.beginPath();ctx.roundRect(6,6,180,52,8);ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,0.9)';ctx.font='12px Arial';ctx.textAlign='left';
+  const captured=TERRITORIES.filter(t=>t.owner==='madrid').length;
+  ctx.fillText('🗺️ Территорий: '+captured+'/'+TERRITORIES.length,14,23);
+  ctx.fillText('🪙 Доход: +'+(TERRITORIES.filter(t=>t.owner==='madrid'&&!t.locked).length*0.8).toFixed(1)+'/с',14,40);
+  ctx.fillText('Тап: '+(tapMode==='base'?'🏗️ База':'tapMode'==='archer'?'🏹':'⚔️'),14,55);
+  ctx.restore();
+
+  // ── TAP HINT (bottom-left, white rect)
+  ctx.save();
+  const hints={soldier:'⚔️ Нанять воина',archer:'🏹 Нанять лучника',base:'🏗️ Тапни на квадрат'};
+  ctx.font='12px Arial';ctx.textAlign='left';
+  const ht=hints[tapMode];const hw=ctx.measureText(ht).width;
+  ctx.fillStyle='rgba(255,255,255,0.18)';
+  ctx.beginPath();ctx.roundRect(6,viewH-28,hw+20,22,6);ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.9)';
+  ctx.fillText(ht,16,viewH-11);
+  ctx.restore();
+}
+
+// ════════════════════════════════════════════════════
+// MAIN DRAW
+// ════════════════════════════════════════════════════
+function draw(){
+  ctx.clearRect(0,0,viewW,viewH);
+  drawMap();
+  // Draw territory fills first
+  drawTerritories();
+  // Capture zone circles
+  for(const t of TERRITORIES)drawCapZone(t);
+  drawBuildSpots();
+  drawParisBoss();
+  for(const b of bases)drawBase(b);
+  drawCity();
+  for(const s of soldiers)drawUnit(s,'#3b82f6','#93c5fd');
+  for(const a of archers) drawArcher(a);
+  drawArrows();
+  for(const e of enemies) drawEnemyUnit(e);
+  drawRain();
+  drawHUD();
+}
+
+// ════════════════════════════════════════════════════
+// LOOP
+// ════════════════════════════════════════════════════
+function loop(ts){
+  if(!lastTime)lastTime=ts;
+  const dt=Math.min(0.05,(ts-lastTime)/1000);
+  lastTime=ts;
+  update(dt);draw();
+  requestAnimationFrame(loop);
+}
+
+resize();
+updateUI();
+camX=clamp(city.x-viewW/2,0,MAP_W-viewW);
+camY=clamp(city.y-viewH/2,0,MAP_H-viewH);
+buySoldier();
+startRest();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
