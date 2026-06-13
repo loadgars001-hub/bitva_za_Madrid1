@@ -145,6 +145,35 @@ function clampCam(){camX=clamp(camX,0,MAP_W-viewW);camY=clamp(camY,0,MAP_H-viewH
 
 function terCenter(t){return{x:t.x+t.w/2, y:t.y+t.h/2};}
 
+// ── Shared drawing utilities ──
+function drawHpBar(sx,sy,barW,barH,pct,fg,bg){
+  bg=bg||'#111';
+  ctx.fillStyle=bg;ctx.fillRect(sx-barW/2,sy,barW,barH);
+  ctx.fillStyle=fg;ctx.fillRect(sx-barW/2,sy,barW*pct,barH);
+}
+function drawLabel(text,cx,cy,font,color){
+  ctx.font=font||'bold 14px Arial';ctx.textAlign='center';
+  const lw=ctx.measureText(text).width;
+  ctx.fillStyle='rgba(255,255,255,0.18)';
+  ctx.beginPath();ctx.roundRect(cx-lw/2-8,cy-12,lw+16,22,6);ctx.fill();
+  ctx.fillStyle=color||'#fff';ctx.fillText(text,cx,cy+4);
+}
+function offScreen(sx,sy,m){return sx<-m||sy<-m||sx>viewW+m||sy>viewH+m;}
+function rectOffScreen(sx,sy,w,h,m){return sx>viewW+m||sy>viewH+m||sx+w<-m||sy+h<-m;}
+function tickCD(u,dt){u.cooldown=Math.max(0,u.cooldown-dt);}
+function idlePatrol(u,dt,jitter,speedMult){
+  const unc=TERRITORIES.find(tr=>tr.owner!=='madrid'&&!tr.locked);
+  if(unc){const c=terCenter(unc);moveTo(u,c.x+rand(-jitter,jitter),c.y+rand(-jitter,jitter),u.speed*speedMult,dt);}
+  else moveTo(u,clamp(u.x+rand(-80,80),20,MAP_W-20),clamp(u.y+rand(-80,80),20,MAP_H-20),u.speed*(speedMult*.75),dt);
+}
+function buyUnit(cost,list,factory,wx,wy){
+  if(gold<cost)return false;
+  gold-=cost;
+  const x=wx??city.x+city.w+30, y=wy??city.y+city.h/2+rand(-40,40);
+  list.push(factory(clamp(x,20,MAP_W-20),clamp(y,20,MAP_H-20)));
+  return true;
+}
+
 // ════════════════════════════════════════════════════
 // FACTORIES
 // ════════════════════════════════════════════════════
@@ -180,20 +209,8 @@ function initRain(){
 // ════════════════════════════════════════════════════
 // PURCHASE
 // ════════════════════════════════════════════════════
-function buySoldier(wx,wy){
-  if(gold<25)return false;
-  gold-=25;
-  const x=wx??city.x+city.w+30, y=wy??city.y+city.h/2+rand(-40,40);
-  soldiers.push(mkSoldier(clamp(x,20,MAP_W-20),clamp(y,20,MAP_H-20)));
-  return true;
-}
-function buyArcher(wx,wy){
-  if(gold<45)return false;
-  gold-=45;
-  const x=wx??city.x+city.w+30, y=wy??city.y+city.h/2+rand(-40,40);
-  archers.push(mkArcher(clamp(x,20,MAP_W-20),clamp(y,20,MAP_H-20)));
-  return true;
-}
+function buySoldier(wx,wy){return buyUnit(25,soldiers,mkSoldier,wx,wy);}
+function buyArcher(wx,wy){return buyUnit(45,archers,mkArcher,wx,wy);}
 function buyBase(wx,wy){
   if(gold<80)return false;
   let bi=-1,bd=Infinity;
@@ -344,16 +361,14 @@ function update(dt){
   // ── Soldiers
   for(let i=0;i<soldiers.length;i++){
     const s=soldiers[i];
-    s.cooldown=Math.max(0,s.cooldown-dt);
+    tickCD(s,dt);
     const t=nearest(s,enemies);
     if(t){
       moveTo(s,t.x,t.y,s.speed,dt);
       if(dist(s.x,s.y,t.x,t.y)<=s.range&&s.cooldown<=0){t.hp-=s.dmg;s.cooldown=.45;}
     } else {
       // Move toward uncaptured territory or patrol base
-      const unc=TERRITORIES.find(tr=>tr.owner!=='madrid'&&!tr.locked);
-      if(unc){const c=terCenter(unc);moveTo(s,c.x+rand(-50,50),c.y+rand(-50,50),s.speed*.4,dt);}
-      else moveTo(s,clamp(s.x+rand(-80,80),20,MAP_W-20),clamp(s.y+rand(-80,80),20,MAP_H-20),s.speed*.3,dt);
+      idlePatrol(s,dt,50,.4);
     }
     for(let j=i+1;j<soldiers.length;j++){
       const o=soldiers[j],d=dist(s.x,s.y,o.x,o.y);
@@ -363,7 +378,7 @@ function update(dt){
 
   // ── Archers
   for(const a of archers){
-    a.cooldown=Math.max(0,a.cooldown-dt);
+    tickCD(a,dt);
     const t=nearest(a,enemies);
     if(t){
       const d=dist(a.x,a.y,t.x,t.y);
@@ -371,8 +386,7 @@ function update(dt){
       else if(d>a.range)moveTo(a,t.x,t.y,a.speed,dt);
       if(d<=a.range&&a.cooldown<=0){t.hp-=a.dmg;a.cooldown=.75;arrows.push({x:a.x,y:a.y,tx:t.x,ty:t.y,life:.18});}
     } else {
-      const unc=TERRITORIES.find(tr=>tr.owner!=='madrid'&&!tr.locked);
-      if(unc){const c=terCenter(unc);moveTo(a,c.x+rand(-60,60),c.y+rand(-60,60),a.speed*.3,dt);}
+      idlePatrol(a,dt,60,.3);
     }
   }
   arrows=arrows.filter(ar=>{ar.life-=dt;return ar.life>0;});
@@ -380,7 +394,7 @@ function update(dt){
   // ── Enemies (Paris)
   const friendly=[...soldiers,...archers];
   for(const e of enemies){
-    e.cooldown=Math.max(0,e.cooldown-dt);
+    tickCD(e,dt);
     const ft=nearest(e,friendly);
     let tx=city.x+city.w/2,ty=city.y+city.h/2;
     // Also target Madrid-owned territories
@@ -444,7 +458,7 @@ const TER_COLORS={
 function drawTerritories(){
   for(const t of TERRITORIES){
     const [sx,sy]=w2s(t.x,t.y);
-    if(sx>viewW+10||sy>viewH+10||sx+t.w<-10||sy+t.h<-10)continue;
+    if(rectOffScreen(sx,sy,t.w,t.h,10))continue;
     const col=TER_COLORS[t.owner]||TER_COLORS.neutral;
 
     // Territory fill
@@ -459,20 +473,8 @@ function drawTerritories(){
     ctx.strokeRect(sx,sy,t.w,t.h);
     ctx.setLineDash([]);
 
-    // Name label (white semi-transparent rectangle behind text)
     const cx=sx+t.w/2, cy=sy+t.h/2;
-    ctx.font='bold 14px Arial';
-    ctx.textAlign='center';
-    const lbl=col.flag+' '+t.name;
-    const lw=ctx.measureText(lbl).width;
-
-    // ► WHITE SEMI-TRANSPARENT RECTANGLE
-    ctx.fillStyle='rgba(255,255,255,0.18)';
-    ctx.beginPath();
-    ctx.roundRect(cx-lw/2-8,cy-12,lw+16,22,6);
-    ctx.fill();
-    ctx.fillStyle='#fff';
-    ctx.fillText(lbl,cx,cy+4);
+    drawLabel(col.flag+' '+t.name,cx,cy);
 
     // Capture progress bar (if not locked and in progress)
     if(!t.locked&&t.owner!=='madrid'){
@@ -498,7 +500,7 @@ function drawCapZone(t){
   // Pulsing capture radius circle on territory center
   if(t.locked)return;
   const c=terCenter(t);const[sx,sy]=w2s(c.x,c.y);
-  if(sx<-CAP_RADIUS||sy<-CAP_RADIUS||sx>viewW+CAP_RADIUS||sy>viewH+CAP_RADIUS)return;
+  if(offScreen(sx,sy,CAP_RADIUS))return;
   const pulse=.5+.5*Math.sin(Date.now()*.003);
   ctx.save();
   ctx.globalAlpha=.07+.05*pulse;
@@ -513,7 +515,7 @@ function drawCapZone(t){
 
 function drawParisBoss(){
   const [sx,sy]=w2s(PARIS_BASE.x,PARIS_BASE.y);
-  if(sx>viewW+120||sy>viewH+120||sx+PARIS_BASE.w<-20)return;
+  if(rectOffScreen(sx,sy,PARIS_BASE.w,PARIS_BASE.h,120))return;
   ctx.save();
   ctx.fillStyle='#7f1d1d';ctx.fillRect(sx,sy,PARIS_BASE.w,PARIS_BASE.h);
   ctx.fillStyle='#991b1b';
@@ -527,18 +529,10 @@ function drawParisBoss(){
   ctx.fillStyle='#1d4ed8';ctx.fillRect(sx+PARIS_BASE.w/2+1,sy-50,5,22);
   ctx.fillStyle='#ef4444';ctx.fillRect(sx+PARIS_BASE.w/2+6,sy-50,5,22);
 
-  // Label rect
-  ctx.font='bold 13px Arial';ctx.textAlign='center';
-  const lbl='🇫🇷 Париж';const lw=ctx.measureText(lbl).width;
-  ctx.fillStyle='rgba(255,255,255,0.18)';
-  ctx.beginPath();ctx.roundRect(sx+PARIS_BASE.w/2-lw/2-8,sy-66,lw+16,20,5);ctx.fill();
-  ctx.fillStyle='#fff';ctx.fillText(lbl,sx+PARIS_BASE.w/2,sy-51);
+  drawLabel('🇫🇷 Париж',sx+PARIS_BASE.w/2,sy-55,'bold 13px Arial');
 
-  // HP bar
   const pct=Math.max(0,PARIS_BASE.hp/PARIS_BASE.maxHp);
-  ctx.fillStyle='#111';ctx.fillRect(sx,sy-10,PARIS_BASE.w,6);
-  ctx.fillStyle=pct>.5?'#22c55e':'#ef4444';
-  ctx.fillRect(sx,sy-10,PARIS_BASE.w*pct,6);
+  drawHpBar(sx+PARIS_BASE.w/2,sy-10,PARIS_BASE.w,6,pct,pct>.5?'#22c55e':'#ef4444');
   ctx.restore();
 }
 
@@ -574,7 +568,7 @@ function drawBuildSpots(){
   for(let i=0;i<BASE_SPOTS.length;i++){
     if(bases.find(b=>b.spotIdx===i))continue;
     const s=BASE_SPOTS[i];const[sx,sy]=w2s(s.x,s.y);
-    if(sx<-60||sy<-60||sx>viewW+60||sy>viewH+60)continue;
+    if(offScreen(sx,sy,60))continue;
     ctx.save();
     ctx.fillStyle='rgba(255,255,255,0.12)';
     ctx.strokeStyle='#f59e0b';ctx.lineWidth=2;ctx.setLineDash([6,4]);
@@ -587,15 +581,14 @@ function drawBuildSpots(){
 
 function drawBase(b){
   const[sx,sy]=w2s(b.x,b.y);
-  if(sx>viewW+100||sy>viewH+100||sx+b.w<-20)return;
+  if(rectOffScreen(sx,sy,b.w,b.h,100))return;
   ctx.save();
   ctx.fillStyle='#92400e';ctx.fillRect(sx,sy,b.w,b.h);
   ctx.fillStyle='#78350f';ctx.fillRect(sx+10,sy+20,20,40);ctx.fillRect(sx+50,sy+10,20,50);
   ctx.fillStyle='#fbbf24';ctx.fillRect(sx+b.w/2-2,sy-20,4,22);
   ctx.fillStyle='#ef4444';ctx.beginPath();ctx.moveTo(sx+b.w/2+2,sy-20);ctx.lineTo(sx+b.w/2+16,sy-12);ctx.lineTo(sx+b.w/2+2,sy-4);ctx.fill();
   const pct=Math.max(0,b.hp/b.maxHp);
-  ctx.fillStyle='#111';ctx.fillRect(sx,sy-10,b.w,5);
-  ctx.fillStyle=pct>.5?'#22c55e':'#eab308';ctx.fillRect(sx,sy-10,b.w*pct,5);
+  drawHpBar(sx+b.w/2,sy-10,b.w,5,pct,pct>.5?'#22c55e':'#eab308');
   if(phase==='rest'){ctx.globalAlpha=.12;ctx.strokeStyle='#4ade80';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx+b.w/2,sy+b.h/2,b.healR,0,Math.PI*2);ctx.stroke();}
   ctx.restore();
 }
@@ -606,38 +599,30 @@ function drawCity(){
   ctx.fillStyle='#d97706';ctx.fillRect(sx,sy,city.w,city.h);
   ctx.fillStyle='#92400e';ctx.fillRect(sx+12,sy+32,22,36);ctx.fillRect(sx+62,sy+18,24,50);
   ctx.fillStyle='#b45309';ctx.fillRect(sx-8,sy-8,20,30);ctx.fillRect(sx+city.w-12,sy-8,20,30);
-  // Label with white semi-transparent rect
-  ctx.font='bold 14px Arial';ctx.textAlign='center';
-  const lbl='🇪🇸 Madrid';const lw=ctx.measureText(lbl).width;
-  ctx.fillStyle='rgba(255,255,255,0.18)';
-  ctx.beginPath();ctx.roundRect(sx+city.w/2-lw/2-8,sy-28,lw+16,22,6);ctx.fill();
-  ctx.fillStyle='#fff';ctx.fillText(lbl,sx+city.w/2,sy-11);
+  drawLabel('🇪🇸 Madrid',sx+city.w/2,sy-15);
   const hpPct=Math.max(0,city.hp/city.maxHp);
-  ctx.fillStyle='#111';ctx.fillRect(sx,sy+city.h+4,city.w,6);
-  ctx.fillStyle=hpPct>.5?'#22c55e':'#ef4444';ctx.fillRect(sx,sy+city.h+4,city.w*hpPct,6);
+  drawHpBar(sx+city.w/2,sy+city.h+4,city.w,6,hpPct,hpPct>.5?'#22c55e':'#ef4444');
   ctx.restore();
 }
 
 function drawUnit(u,fill,outline){
   const[sx,sy]=w2s(u.x,u.y);
-  if(sx<-20||sy<-20||sx>viewW+20||sy>viewH+20)return;
+  if(offScreen(sx,sy,20))return;
   ctx.beginPath();ctx.fillStyle=fill;ctx.arc(sx,sy,u.r,0,Math.PI*2);ctx.fill();
   ctx.lineWidth=2;ctx.strokeStyle=outline;ctx.stroke();
-  const bw=22,bh=4,pct=Math.max(0,u.hp/u.maxHp);
-  ctx.fillStyle='#111';ctx.fillRect(sx-bw/2,sy-u.r-9,bw,bh);
-  ctx.fillStyle=pct>.5?'#4ade80':'#facc15';ctx.fillRect(sx-bw/2,sy-u.r-9,bw*pct,bh);
+  const pct=Math.max(0,u.hp/u.maxHp);
+  drawHpBar(sx,sy-u.r-9,22,4,pct,pct>.5?'#4ade80':'#facc15');
 }
 
 function drawArcher(a){
   const[sx,sy]=w2s(a.x,a.y);
-  if(sx<-20||sy<-20||sx>viewW+20||sy>viewH+20)return;
+  if(offScreen(sx,sy,20))return;
   ctx.save();ctx.translate(sx,sy);
   ctx.beginPath();ctx.fillStyle='#f59e0b';ctx.strokeStyle='#fde68a';ctx.lineWidth=2;
   ctx.moveTo(0,-a.r);ctx.lineTo(a.r*.85,a.r*.7);ctx.lineTo(-a.r*.85,a.r*.7);
   ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
-  const bw=22,bh=4,pct=Math.max(0,a.hp/a.maxHp);
-  ctx.fillStyle='#111';ctx.fillRect(sx-bw/2,sy-a.r-9,bw,bh);
-  ctx.fillStyle=pct>.5?'#4ade80':'#facc15';ctx.fillRect(sx-bw/2,sy-a.r-9,bw*pct,bh);
+  const pct=Math.max(0,a.hp/a.maxHp);
+  drawHpBar(sx,sy-a.r-9,22,4,pct,pct>.5?'#4ade80':'#facc15');
 }
 
 function drawArrows(){
@@ -652,17 +637,14 @@ function drawArrows(){
 
 function drawEnemyUnit(e){
   const[sx,sy]=w2s(e.x,e.y);
-  if(sx<-20||sy<-20||sx>viewW+20||sy>viewH+20)return;
-  // Paris enemy: dark red diamond shape
+  if(offScreen(sx,sy,20))return;
   ctx.save();ctx.translate(sx,sy);ctx.rotate(Math.PI/4);
   ctx.fillStyle='#dc2626';ctx.strokeStyle='#fca5a5';ctx.lineWidth=2;
   const s=e.r*.9;
   ctx.fillRect(-s,-s,s*2,s*2);ctx.strokeRect(-s,-s,s*2,s*2);
   ctx.restore();
-  // Label "Paris" on first few visible
-  const bw=22,bh=4,pct=Math.max(0,e.hp/e.maxHp);
-  ctx.fillStyle='#111';ctx.fillRect(sx-bw/2,sy-e.r-9,bw,bh);
-  ctx.fillStyle='#f87171';ctx.fillRect(sx-bw/2,sy-e.r-9,bw*pct,bh);
+  const pct=Math.max(0,e.hp/e.maxHp);
+  drawHpBar(sx,sy-e.r-9,22,4,pct,'#f87171');
 }
 
 function drawRain(){
