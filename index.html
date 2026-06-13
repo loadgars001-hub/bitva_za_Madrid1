@@ -89,18 +89,25 @@ const BASE_SPOTS=[
 ];
 
 const canvas=document.getElementById('game');
+if(!canvas){throw new Error('Canvas element #game not found');}
 const ctx=canvas.getContext('2d');
+if(!ctx){throw new Error('Could not get 2D rendering context');}
 
-// ── UI refs
-const gEl=document.getElementById('gEl'),sEl=document.getElementById('sEl'),
-  hEl=document.getElementById('hEl'),soEl=document.getElementById('soEl'),
-  arEl=document.getElementById('arEl'),enEl=document.getElementById('enEl'),
-  tEl=document.getElementById('tEl'),wEl=document.getElementById('wEl'),
-  phPill=document.getElementById('phPill'),rnPill=document.getElementById('rnPill'),
-  rnEl=document.getElementById('rnEl'),bSol=document.getElementById('bSol'),
-  bArc=document.getElementById('bArc'),bBase=document.getElementById('bBase'),
-  bHard=document.getElementById('bHard'),bNext=document.getElementById('bNext'),
-  phaseMsg=document.getElementById('phaseMsg');
+// ── UI refs (with validation)
+function getEl(id){
+  const el=document.getElementById(id);
+  if(!el)console.error('Missing UI element: #'+id);
+  return el;
+}
+const gEl=getEl('gEl'),sEl=getEl('sEl'),
+  hEl=getEl('hEl'),soEl=getEl('soEl'),
+  arEl=getEl('arEl'),enEl=getEl('enEl'),
+  tEl=getEl('tEl'),wEl=getEl('wEl'),
+  phPill=getEl('phPill'),rnPill=getEl('rnPill'),
+  rnEl=getEl('rnEl'),bSol=getEl('bSol'),
+  bArc=getEl('bArc'),bBase=getEl('bBase'),
+  bHard=getEl('bHard'),bNext=getEl('bNext'),
+  phaseMsg=getEl('phaseMsg');
 
 // ── State
 let gold=200,score=0,wave=1;
@@ -180,29 +187,37 @@ function initRain(){
 // ════════════════════════════════════════════════════
 // PURCHASE
 // ════════════════════════════════════════════════════
+function showWarning(msg){
+  const el=document.getElementById('phaseMsg');
+  if(!el)return;
+  el.textContent=msg;el.style.color='#fbbf24';
+  el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),1200);
+}
 function buySoldier(wx,wy){
-  if(gold<25)return false;
+  if(gold<25){showWarning('⚠️ Мало золота (нужно 25🪙)');return false;}
   gold-=25;
   const x=wx??city.x+city.w+30, y=wy??city.y+city.h/2+rand(-40,40);
   soldiers.push(mkSoldier(clamp(x,20,MAP_W-20),clamp(y,20,MAP_H-20)));
   return true;
 }
 function buyArcher(wx,wy){
-  if(gold<45)return false;
+  if(gold<45){showWarning('⚠️ Мало золота (нужно 45🪙)');return false;}
   gold-=45;
   const x=wx??city.x+city.w+30, y=wy??city.y+city.h/2+rand(-40,40);
   archers.push(mkArcher(clamp(x,20,MAP_W-20),clamp(y,20,MAP_H-20)));
   return true;
 }
 function buyBase(wx,wy){
-  if(gold<80)return false;
+  if(gold<80){showWarning('⚠️ Мало золота (нужно 80🪙)');return false;}
+  if(typeof wx!=='number'||typeof wy!=='number'){showWarning('⚠️ Тапните на карту');return false;}
   let bi=-1,bd=Infinity;
   for(let i=0;i<BASE_SPOTS.length;i++){
     if(bases.find(b=>b.spotIdx===i))continue;
     const d=dist(wx,wy,BASE_SPOTS[i].x,BASE_SPOTS[i].y);
     if(d<bd){bd=d;bi=i;}
   }
-  if(bi<0||bd>220)return false;
+  if(bi<0||bd>220){showWarning('⚠️ Нет подходящей точки');return false;}
   gold-=80; bases.push(mkBase(bi)); return true;
 }
 
@@ -246,29 +261,31 @@ bBase.onclick=()=>{tapMode='base'; updateUI();};
 bHard.onclick=()=>{for(let i=0;i<5;i++)enemies.push(mkEnemy(wave));updateUI();};
 bNext.onclick=()=>startFight();
 
-canvas.addEventListener('pointerdown',e=>{
+function getCanvasCoords(e){
   const r=canvas.getBoundingClientRect();
-  const sx=(e.clientX-r.left)*(canvas.width/r.width);
-  const sy=(e.clientY-r.top)*(canvas.height/r.height);
-  dragStart={sx,sy}; camStart={cx:camX,cy:camY}; isDragging=false;
+  if(!r.width||!r.height)return null;
+  return{sx:(e.clientX-r.left)*(canvas.width/r.width),sy:(e.clientY-r.top)*(canvas.height/r.height)};
+}
+canvas.addEventListener('pointerdown',e=>{
+  const coords=getCanvasCoords(e);
+  if(!coords)return;
+  dragStart=coords; camStart={cx:camX,cy:camY}; isDragging=false;
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener('pointermove',e=>{
   if(!dragStart)return;
-  const r=canvas.getBoundingClientRect();
-  const sx=(e.clientX-r.left)*(canvas.width/r.width);
-  const sy=(e.clientY-r.top)*(canvas.height/r.height);
-  const dx=sx-dragStart.sx,dy=sy-dragStart.sy;
+  const coords=getCanvasCoords(e);
+  if(!coords)return;
+  const dx=coords.sx-dragStart.sx,dy=coords.sy-dragStart.sy;
   if(!isDragging&&(Math.abs(dx)>6||Math.abs(dy)>6))isDragging=true;
   if(isDragging){camX=camStart.cx-dx;camY=camStart.cy-dy;clampCam();}
 });
 canvas.addEventListener('pointerup',e=>{
   if(!dragStart)return;
-  const r=canvas.getBoundingClientRect();
-  const sx=(e.clientX-r.left)*(canvas.width/r.width);
-  const sy=(e.clientY-r.top)*(canvas.height/r.height);
+  const coords=getCanvasCoords(e);
+  if(!coords)return;
   if(!isDragging){
-    const [wx,wy]=s2w(sx,sy);
+    const [wx,wy]=s2w(coords.sx,coords.sy);
     if(tapMode==='base'){if(!buyBase(wx,wy))tapMode='soldier';}
     else if(tapMode==='archer'){if(!buyArcher(wx,wy))buySoldier(wx,wy);}
     else{if(!buySoldier(wx,wy))buyArcher(wx,wy);}
@@ -303,8 +320,9 @@ function update(dt){
       // Capturing for Madrid
       t.progress=Math.min(100,t.progress+CAP_SPEED*madridUnits.length*dt);
       if(t.progress>=100&&t.owner!=='madrid'){
+        const prevOwner=t.owner;
         t.owner='madrid';
-        gold+=t.owner==='paris'?60:30;
+        gold+=prevOwner==='paris'?60:30;
         score+=100;
         showMsg('✅ Захвачено: '+t.name,'#4ade80',1800);
       }
@@ -407,7 +425,13 @@ function update(dt){
   bases   =bases.filter(b=>b.hp>0);
   enemies =enemies.filter(e=>{if(e.hp<=0){score+=12+wave*2;gold+=7+wave;return false;}return true;});
 
-  if(city.hp<=0){draw();alert('Madrid пал!\nОчки: '+Math.floor(score)+'\nВолна: '+wave);location.reload();}
+  if(city.hp<=0){
+    draw();
+    phase='gameover';
+    showMsg('💀 Madrid пал! Очки: '+Math.floor(score)+' | Волна: '+wave,'#ef4444',5000);
+    setTimeout(()=>{try{location.reload();}catch(e){console.error('Reload failed:',e);}},5000);
+    return;
+  }
   updateUI();
 }
 
@@ -415,19 +439,24 @@ function update(dt){
 // UI UPDATE
 // ════════════════════════════════════════════════════
 function updateUI(){
-  gEl.textContent=Math.floor(gold);
-  sEl.textContent=Math.floor(score);
-  hEl.textContent=Math.max(0,Math.floor(city.hp));
-  soEl.textContent=soldiers.length;
-  arEl.textContent=archers.length;
-  enEl.textContent=enemies.length;
-  tEl.textContent=TERRITORIES.filter(t=>t.owner==='madrid').length;
-  wEl.textContent=wave;
-  if(phase==='rest'){phPill.textContent='😴 Отдых '+Math.ceil(restLeft)+'с';phPill.className='pill rest';bNext.style.display='inline-block';}
-  else{phPill.textContent='⚔️ Волна '+wave;phPill.className='pill wave';bNext.style.display='none';}
-  if(rainOn){rnEl.textContent=Math.ceil(rainLeft)+'с';rnPill.className='pill rain on';}
-  else{const t=Math.ceil(rainCD);rnEl.textContent=Math.floor(t/60)+':'+String(t%60).padStart(2,'0');rnPill.className='pill rain';}
-  bBase.textContent=tapMode==='base'?'📍 Тапни на точку':'🏗️ База (80🪙)';
+  if(gEl)gEl.textContent=Math.floor(gold);
+  if(sEl)sEl.textContent=Math.floor(score);
+  if(hEl)hEl.textContent=Math.max(0,Math.floor(city.hp));
+  if(soEl)soEl.textContent=soldiers.length;
+  if(arEl)arEl.textContent=archers.length;
+  if(enEl)enEl.textContent=enemies.length;
+  if(tEl)tEl.textContent=TERRITORIES.filter(t=>t.owner==='madrid').length;
+  if(wEl)wEl.textContent=wave;
+  if(phPill){
+    if(phase==='rest'){phPill.textContent='😴 Отдых '+Math.ceil(restLeft)+'с';phPill.className='pill rest';}
+    else{phPill.textContent='⚔️ Волна '+wave;phPill.className='pill wave';}
+  }
+  if(bNext)bNext.style.display=phase==='rest'?'inline-block':'none';
+  if(rnPill&&rnEl){
+    if(rainOn){rnEl.textContent=Math.ceil(rainLeft)+'с';rnPill.className='pill rain on';}
+    else{const t=Math.ceil(rainCD);rnEl.textContent=Math.floor(t/60)+':'+String(t%60).padStart(2,'0');rnPill.className='pill rain';}
+  }
+  if(bBase)bBase.textContent=tapMode==='base'?'📍 Тапни на точку':'🏗️ База (80🪙)';
 }
 
 // ════════════════════════════════════════════════════
@@ -727,7 +756,7 @@ function drawHUD(){
   const captured=TERRITORIES.filter(t=>t.owner==='madrid').length;
   ctx.fillText('🗺️ Территорий: '+captured+'/'+TERRITORIES.length,14,23);
   ctx.fillText('🪙 Доход: +'+(TERRITORIES.filter(t=>t.owner==='madrid'&&!t.locked).length*0.8).toFixed(1)+'/с',14,40);
-  ctx.fillText('Тап: '+(tapMode==='base'?'🏗️ База':'tapMode'==='archer'?'🏹':'⚔️'),14,55);
+  ctx.fillText('Тап: '+(tapMode==='base'?'🏗️ База':tapMode==='archer'?'🏹':'⚔️'),14,55);
   ctx.restore();
 
   // ── TAP HINT (bottom-left, white rect)
@@ -768,10 +797,15 @@ function draw(){
 // LOOP
 // ════════════════════════════════════════════════════
 function loop(ts){
-  if(!lastTime)lastTime=ts;
-  const dt=Math.min(0.05,(ts-lastTime)/1000);
-  lastTime=ts;
-  update(dt);draw();
+  try{
+    if(!lastTime)lastTime=ts;
+    const dt=Math.min(0.05,(ts-lastTime)/1000);
+    lastTime=ts;
+    if(phase==='gameover')return;
+    update(dt);draw();
+  }catch(e){
+    console.error('Game loop error:',e);
+  }
   requestAnimationFrame(loop);
 }
 
