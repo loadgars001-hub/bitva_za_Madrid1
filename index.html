@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'"/>
+<meta http-equiv="X-Content-Type-Options" content="nosniff"/>
 <title>Битва за Madrid v5</title>
 <style>
 :root{color-scheme:dark;}
@@ -225,6 +227,18 @@ function startFight(){
   phase='fight'; bNext.style.display='none';
   showMsg('⚔️ ВОЛНА '+wave+' — ПАРИЖ АТАКУЕТ!','#ff6b6b');
 }
+function showGameOver(){
+  phase='over';
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;flex-direction:column;z-index:200;';
+  ov.innerHTML='<div style="text-align:center;color:#fff;font-family:inherit">'
+    +'<h1 style="font-size:clamp(24px,5vw,48px);margin-bottom:12px;color:#ef4444">Madrid \u043f\u0430\u043b!</h1>'
+    +'<p style="font-size:18px;margin:6px 0">\u041e\u0447\u043a\u0438: '+Math.floor(score)+'</p>'
+    +'<p style="font-size:18px;margin:6px 0">\u0412\u043e\u043b\u043d\u0430: '+wave+'</p>'
+    +'<button onclick="location.reload()" style="margin-top:18px;padding:12px 32px;font-size:16px;border-radius:8px;border:none;background:#1d4ed8;color:#fff;cursor:pointer">\u0417\u0430\u043d\u043e\u0432\u043e</button>'
+    +'</div>';
+  document.body.appendChild(ov);
+}
 
 // ════════════════════════════════════════════════════
 // RESIZE
@@ -281,6 +295,7 @@ canvas.addEventListener('pointerup',e=>{
 // UPDATE
 // ════════════════════════════════════════════════════
 function update(dt){
+  if(phase==='over')return;
   // ── Rain
   if(rainOn){
     rainLeft-=dt;
@@ -407,7 +422,7 @@ function update(dt){
   bases   =bases.filter(b=>b.hp>0);
   enemies =enemies.filter(e=>{if(e.hp<=0){score+=12+wave*2;gold+=7+wave;return false;}return true;});
 
-  if(city.hp<=0){draw();alert('Madrid пал!\nОчки: '+Math.floor(score)+'\nВолна: '+wave);location.reload();}
+  if(city.hp<=0){draw();showGameOver();return;}
   updateUI();
 }
 
@@ -727,7 +742,7 @@ function drawHUD(){
   const captured=TERRITORIES.filter(t=>t.owner==='madrid').length;
   ctx.fillText('🗺️ Территорий: '+captured+'/'+TERRITORIES.length,14,23);
   ctx.fillText('🪙 Доход: +'+(TERRITORIES.filter(t=>t.owner==='madrid'&&!t.locked).length*0.8).toFixed(1)+'/с',14,40);
-  ctx.fillText('Тап: '+(tapMode==='base'?'🏗️ База':'tapMode'==='archer'?'🏹':'⚔️'),14,55);
+  ctx.fillText('Тап: '+(tapMode==='base'?'🏗️ База':tapMode==='archer'?'🏹':'⚔️'),14,55);
   ctx.restore();
 
   // ── TAP HINT (bottom-left, white rect)
